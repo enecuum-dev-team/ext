@@ -174,16 +174,22 @@ class PoAServer {
 		return clients[0];
 	}
 
-	choice_token(clients) {
+	choice_token(clients, owner_tokens) {
 		let token_list = clients.reduce(function (acc, el) {
 			let item = acc.find(acc_item => acc_item.token === el.token);
 			if (item)
 				item.count++;
 			else
-				acc.push({token: el.token, count: 0});
+				acc.push({token: el.token, count: 1});
 			return acc;
 		}, []);
-		console.info(`token list ${JSON.stringify(token_list)}`);
+		console.debug(`token list ${JSON.stringify(token_list)}`);
+		console.debug(`owner_tokens ${JSON.stringify(owner_tokens)}`);
+		let active_ovner_tokens = token_list.filter(el => owner_tokens.some(item => item.hash === el.token ));
+		console.debug(`active_ovner_tokens = ${active_ovner_tokens.length}`);
+		//if exist miners
+		if(active_ovner_tokens.length > 0)
+			token_list = active_ovner_tokens;
 		let sum = token_list.reduce(function (accumulator, currentValue) {
 			return accumulator + currentValue.count;
 		}, 0);
@@ -197,7 +203,7 @@ class PoAServer {
 		}
 	}
 
-	async send_mblock(mblock, token) {
+	async send_mblock(mblock, owner) {
 		let tries = 0;
 		let sent = false;
 		let sent_hash = null;
@@ -208,8 +214,11 @@ class PoAServer {
 		}
 
 		do {
-			if (!token)
-				token = this.choice_token(this.clients);
+			let owner_tokens = [];
+			console.debug(`select owner ${owner.substring(0,10)}`);
+			if(owner != undefined)
+				owner_tokens = await this.db.get_minable_tokens_by_owner(owner);
+			let token = this.choice_token(this.clients, owner_tokens);
 			console.debug({token});
 
 			let time = process.hrtime();
