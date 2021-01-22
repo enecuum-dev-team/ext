@@ -116,45 +116,43 @@ let db = new DB({
 	multipleStatements: true
 }, config);
 
-let native_mblocks_count = config.mblock_slots.filter(s => s.token === Utils.ENQ_TOKEN_NAME)[0].count;
+let native_mblocks_count = 1;
 
 feeder = async function (poa_server) {
 	try {
 		let k = await db.peek_tail(config.tail_timeout);
 		let kblocks_hash = k.hash;
 		let mblocks = await db.get_microblocks(kblocks_hash);
-		//TODO:refactoring
-		let slots_state = {};
-		config.mblock_slots.forEach(function (s) {
-			slots_state[s.token] = 0;
-		});
-		mblocks.forEach(function (m) {
-			slots_state[m.token] = slots_state[m.token] + 1 || 1;
-		});
+
+		let owner_slots = await init_slots(config.mblock_slots.count, kblocks_hash);
+        console.info(`owner_slots = ${JSON.stringify(owner_slots)}`);
 		let txs_awaiting = 0;
 		if (mblocks.length !== 0)
 			txs_awaiting = (await db.get_txs_awaiting(mblocks.map(m => m.hash))).txs_awaiting;
-		if ((txs_awaiting >= config.max_txs_per_macroblock || mblocks.length >= config.max_mblocks_per_macroblock) && Utils.exist_native_token_count(mblocks) >= native_mblocks_count) {
+		let now = Math.floor(new Date() / 1000);
+		if ((txs_awaiting >= config.max_txs_per_macroblock || mblocks.length >= config.max_mblocks_per_macroblock || now > (k.time + config.feader_watchdog)) && Utils.exist_native_token_count(mblocks) >= native_mblocks_count) {
 			console.debug(`Transaction count exceeds config.max_txs_per_macroblock (${config.max_txs_per_macroblock})`);
+			console.debug(`feader watchdog - ${ now > (k.time + config.feader_watchdog)}`)
 			let full_mblocks = await db.get_microblocks_full(kblocks_hash);
 			console.debug(`broadcast microblocks count = ${full_mblocks.length}`);
 			poa_server.transport.broadcast("microblocks", full_mblocks);
 		} else {
 			let txs_required = config.max_tps * (config.feeder_interval_ms * 0.001);
 			txs_required = Math.min(config.max_txs_per_microblock, Math.max(config.min_txs_per_microblock, txs_required));
-			for (const slot of config.mblock_slots) {
-				if (slot.count <= slots_state[slot.token]) {
+
+			for (const slot of owner_slots) {
+				if (slot.count <= 0) {
 					continue;
 				}
-				if ((slot.token === undefined) && (mblocks.length >= config.max_mblocks_per_macroblock)) {
+				if ((slot.id === undefined) && (mblocks.length >= config.max_mblocks_per_macroblock)) {
 					continue;
 				}
-				for (let i = slots_state[slot.token] || 0; i < slot.count; i++) {
+				for (let i = 0; i < slot.count; i++) {
 					let txs = await pending.get_txs(txs_required, config.pending_timeout, config.enable_rnd_txs);
 					console.silly('txs = ', JSON.stringify(txs));
 					if (txs.length !== 0) {
 						let mblock_data = {kblocks_hash, txs};
-						let {sent, sent_hash} = await poa_server.send_mblock(mblock_data, slot.token);
+						let {sent, sent_hash} = await poa_server.send_mblock(mblock_data, slot.id);
 						if (sent) {
 							console.debug(`sent mblock ${sent_hash} for ${kblocks_hash} with txs [${txs.map(t => t.hash)}]`);
 						} else {
@@ -169,6 +167,23 @@ feeder = async function (poa_server) {
 		console.error(e);
 	}
 	setTimeout(feeder, config.feeder_interval_ms, poa_server);
+};
+
+let init_slots = async function(size, kblock_hash) {
+	let owner_slots = await db.get_mining_tkn_owners(size-config.mblock_slots.reserve.length, config.mblock_slots.reserve, config.mblock_slots.min_stake);
+	owner_slots = owner_slots.concat(config.mblock_slots.reserve.map(function(item) {
+		return {id:item};
+	}));
+	owner_slots.forEach(item => item.count = config.mblock_slots.size); //set slot size
+	let used_slots = await db.get_used_slots(kblock_hash);
+	used_slots.forEach(item =>{
+	    let index = owner_slots.findIndex(e => e.id === item.id);
+	    if(index === -1)
+            return;
+		owner_slots[owner_slots.findIndex(e => e.id === item.id)].count = Number(owner_slots[owner_slots.findIndex(e => e.id === item.id)].count) - Number(item.count);
+	});
+
+	return owner_slots;
 };
 
 let start_leader = function(config, db) {
