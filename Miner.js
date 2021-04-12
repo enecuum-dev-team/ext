@@ -1,6 +1,6 @@
 const Utils = require('../Utils');
 const Transport = require('../Transport').Tip;
-var rx = require('../node_modules/node-randomx/addon');
+var rx = require('node-randomx/addon');
 
 class Miner {
 	constructor(config, db) {
@@ -33,7 +33,7 @@ class Miner {
 	async init_vm_randomx(key) {
 		console.info(`Starting RandomX virtual machine. mode - ${this.config.randomx.mode}`);
 		try {
-			this.vm = await rx.RandomxVM(key, ["jit", "ssse3", this.config.randomx.mode]);
+			this.vm = await rx.RandomxVM(key, ["jit", "ssse3", "softAes", this.config.randomx.mode]);
 			return 1;
 		} catch (e) {
 			console.error(e);
@@ -57,16 +57,18 @@ class Miner {
 			let kblocks_hash = tail.hash;
 			console.debug(`re-broadcast sblock for kblock ${kblocks_hash}`);
 			let sblocks = await this.db.get_statblocks(kblocks_hash);
-			if(sblocks.length > 0)
+			if(sblocks.length > 0) {
 				this.transport.broadcast("statblocks", sblocks);
+				this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_RESEND_MINER_INTERVAL);
+			}
 			else {
 				console.warn(`no found statblocks`);
 				this.on_emit_statblock({data:kblocks_hash});
 			}
 		} catch (e) {
 			console.error(e);
+			this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_RESEND_MINER_INTERVAL);
 		}
-		this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_RESEND_MINER_INTERVAL);
 	}
 
 	async on_emit_statblock(msg) {
