@@ -404,7 +404,14 @@ class PoAServer {
 			//TODO: request token from poa
 			client.token = data.data.token || Utils.ENQ_TOKEN_NAME;
 			client.stake = await this.get_client_balance(client.key, client.token);
-			this.db.update_client({id, pubkey: client.key, type: 2});
+			console.silly(`client ${client.id}@${client.ip} token: ${client.token} stake: ${client.stake}`);
+			/*if (client.stake <= 0) {
+				console.debug(`'hail' from client with low stake`);
+				this.send(client.ws, JSON.stringify({ver: POA_PROTOCOL_VERSION, err: "ERR_WRONG_LOW_STAKE"}));
+				client.ws.terminate();
+				console.debug(`clients_count = ${this.clients.length}`);
+			} else*/
+				this.db.update_client({id, pubkey: client.key, type: 2});
 		} else {
 			console.warn(`${client.id}@${client.ip} unknown method - ${data.method}`);
 		}
@@ -413,13 +420,22 @@ class PoAServer {
 	async get_client_balance(key, token){
 		let balance = await this.db.get_balance(key, token);
 		let stake = Number(BigInt(balance.amount) / BigInt(Math.pow(10, balance.decimals)));
-		if (token === Utils.ENQ_TOKEN_NAME && stake > (this.cfg.stake_limits.max_stake / 1e10))
+		if (token === Utils.ENQ_TOKEN_NAME) {
+		  if(stake > (this.cfg.stake_limits.max_stake / 1e10))
 			stake = this.cfg.stake_limits.max_stake / 1e10;
-		return stake;
+		 if(stake < (this.cfg.stake_limits.min_stake / 1e10))
+		 	stake = 0;
+		}
+		if (stake > 0)
+			return 500 + stake / 5;
+		else
+			return 0;
 	}
 
 	on_connection(ws, req) {
-		let ip = req.connection.remoteAddress;
+		let ip = req.socket.remoteAddress;
+		if(!ip)
+			return;
 		ip = ip.substring(7);
 		let karma = this.cfg.karma.init;
 		let last_use = null;

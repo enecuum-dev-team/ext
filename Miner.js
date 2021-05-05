@@ -8,7 +8,7 @@ class Miner {
 		this.config = config;
 		this.difficulty = config.difficulty;
 		this.count_not_complete = 0;
-		//this.native_mblocks_count = this.config.mblock_slots.filter(s => s.token === Utils.ENQ_TOKEN_NAME)[0].count;
+
 		this.native_mblocks_count = 1;
 		this.sync_ranning = false;
 		if (config.port === undefined) {
@@ -19,15 +19,12 @@ class Miner {
 		//TODO: reinit VM (change key), this fix etimeout starting DB
 		this.start_pow_miner(config.randomx.key);
 
+		this.ECC = new Utils.ECC(config.ecc.ecc_mode);
+
 		//init transport
 		this.transport = new Transport(this.config.id, 'miner');
 		this.transport.on('wait_sync', this.on_wait_sync.bind(this));
-		if (this.config.pos_share) {
-			this.transport.on('emit_statblock', this.on_emit_statblock.bind(this));
-			this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_RESEND_MINER_INTERVAL);
-		} else {
-			console.info(`PoS share not specified, PoS is OFF`)
-		}
+		this.transport.on('m_root', this.on_merkle_root.bind(this));
 	}
 
 	async init_vm_randomx(key) {
@@ -42,55 +39,22 @@ class Miner {
 	}
 
 	async start_pow_miner(key) {
-		if (this.config.load > 0) {
-			let res = await this.init_vm_randomx(key);
-			console.info(`Virtual mashine starting result: ${res}`);
-			this.miner(this.config.load);
-		} else {
-			console.info(`POW Miner is OFF`);
-		}
+		let res = await this.init_vm_randomx(key);
+		console.info(`Virtual mashine starting result: ${res}`);
+		let tail = await this.db.peek_tail();
+		this.miner();
 	}
 
-	async resend_sblock() {
-		try {
-			let tail = await this.db.peek_tail();
-			let kblocks_hash = tail.hash;
-			console.debug(`re-broadcast sblock for kblock ${kblocks_hash}`);
-			let sblocks = await this.db.get_statblocks(kblocks_hash);
-			if(sblocks.length > 0) {
-				this.transport.broadcast("statblocks", sblocks);
-				this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_RESEND_MINER_INTERVAL);
-			}
-			else {
-				console.warn(`no found statblocks`);
-				this.on_emit_statblock({data:kblocks_hash});
-			}
-		} catch (e) {
-			console.error(e);
-			this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_RESEND_MINER_INTERVAL);
-		}
-	}
-
-	async on_emit_statblock(msg) {
-		let kblocks_hash = msg.data;
-		console.silly('on_emit_statblock kblocks_hash ', kblocks_hash);
-		clearTimeout(this.timer_resend_sblock);
-
-		let bulletin = "not_implemented_yet";
-		let publisher = this.config.id;
-		let sign = "";
-		let sblock = {kblocks_hash, publisher, sign, bulletin};
-		sblock.hash = Utils.hash_sblock(sblock).toString('hex');
-		let time = process.hrtime();
-		let result = await this.db.put_statblocks([sblock]);
-		let put_time = process.hrtime(time);
-		console.debug(`putting sblock time = ${Utils.format_time(put_time)} | result = ${result}`);
-		if (result) {
-			console.debug(`broadcast sblock for kblock ${kblocks_hash}`);
-			this.transport.broadcast("statblocks", [sblock]);
-		} else
-			console.warn(`not insert sblock`);
-		this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_RESEND_MINER_INTERVAL);
+	async on_merkle_root(msg) {
+		let {kblocks_hash, snapshot_hash, m_root, leader_sign, mblocks, sblocks} = msg.data;
+		console.debug(`on_merkle_root  kblock_hash = ${kblocks_hash}`);
+		console.silly(`on_merkle_root msg ${JSON.stringify(msg.data)}`);
+		//let is_valid = Utils.valid_merkle_root(m_root, mblocks, sblocks, snapshot_hash, leader_sign);
+		let recalc_m_root = Utils.merkle_root_002(mblocks, sblocks, snapshot_hash);
+		let isValid_leader_sign = Utils.valid_leader_sign(kblocks_hash, recalc_m_root, leader_sign, this.config.leader_id, this.ECC, this.config.ecc);
+		console.debug({isValid_leader_sign});
+		if (isValid_leader_sign)
+			this.current_m_root = {m_root, kblocks_hash, mblocks, sblocks, snapshot_hash, leader_sign};
 	}
 
 	on_wait_sync(msg) {
@@ -106,120 +70,257 @@ class Miner {
 		this.transport.broadcast("macroblock", this.cached_macroblock);
 	};
 
-	async miner(load) {
-			console.silly(`Miner started with load ${load}`);
-			try {
-				if(this.sync_ranning) {
-					console.debug(`Miner not started. Sync running...`);
-					return;
-				}
-				let start = new Date();
-				let tail = await this.db.peek_tail(this.config.tail_timeout);
-				let cashier_ptr = await this.db.get_cashier_pointer();
-				if(tail.hash !== cashier_ptr) {
-					console.warn(`Cashier lags behind. Mining stopped`);
-					return;
-				}
+	async miner() {
+		let tail = await this.db.peek_tail(this.config.tail_timeout);
+		if(tail === undefined){
+			setTimeout(this.miner, Utils.MINER_INTERVAL);
+			return;
+		}
+		if (tail.n < this.config.FORKS.fork_block_002)
+			this.miner_000(tail);
+		else
+			this.miner_002(tail);
+	}
 
+	async miner_000(tail) {
+		console.silly(`Miner started`);
+		try {
+			if (this.sync_ranning) {
+				console.debug(`Miner not started. Sync running...`);
+				return;
+			}
+			let start = new Date();
+			if (tail === undefined) {
+				console.debug(`tail is undefined. Mining stopped`);
+				return;
+			}
 
-				let mblocks = await this.db.get_microblocks_full(tail.hash);
-				let sblocks = await this.db.get_statblocks(tail.hash);
-				let snapshot_hash = undefined;
-				let need_snapshot = false;
-				//check snapshot
-				if (tail.n % this.config.snapshot_interval === 0) {
-					snapshot_hash = await this.db.get_snapshot_hash(tail.hash);
-					if (snapshot_hash === undefined) {
-						console.trace(`dosen\`t exist snapshot`);
-						need_snapshot = true;
+			let cashier_ptr = await this.db.get_cashier_pointer();
+			if (tail.hash !== cashier_ptr) {
+				console.debug(`Cashier lags behind. Mining stopped`);
+				return;
+			}
+
+			let mblocks = await this.db.get_microblocks_full(tail.hash);
+			let sblocks = await this.db.get_statblocks(tail.hash);
+
+			let snapshot_hash = undefined;
+			let need_snapshot = false;
+
+			//TODO: remove old validation
+			//check snapshot
+			if (tail.n % this.config.snapshot_interval === 0) {
+				snapshot_hash = await this.db.get_snapshot_hash(tail.hash);
+				if (snapshot_hash === undefined) {
+					console.trace(`dosen\`t exist snapshot`);
+					need_snapshot = true;
+				}
+			}
+			console.trace(`mblocks ${mblocks.length}, sblocks ${sblocks.length}, snapshot ${need_snapshot}`);
+			// Filter mblocks by min stakes
+			let accounts = await this.db.get_accounts_all(mblocks.map(m => m.publisher));
+			let tokens = await this.db.get_tokens_all(mblocks.map(m => m.token));
+			mblocks = Utils.valid_full_microblocks(mblocks, accounts, tokens, false);
+			// Filter sblocks by min stakes
+			let pos_stakes = await this.db.get_pos_info(sblocks.map(s => s.publisher));
+			let pos_min_stake = this.config.pos_min_stake;
+			let top_poses = await this.db.get_top_poses(this.config.top_poses_count);
+			sblocks = Utils.valid_full_statblocks(sblocks, pos_stakes, pos_min_stake, top_poses);
+
+			// Сhecking the content of the candidate
+			if (mblocks.length > 0 && sblocks.length > 0 && !need_snapshot && Utils.exist_native_token_count(mblocks) >= this.native_mblocks_count) {
+				this.count_not_complete = 0;
+				let candidate = {
+					time: Math.floor(new Date() / 1000),
+					publisher: this.config.id,
+					nonce: 0,
+					link: tail.hash,
+					m_root: Utils.merkle_root_000(mblocks, sblocks, snapshot_hash)
+				};
+
+				//calc difficulty target
+				let db = this.db;
+				let current_diff = await Utils.calc_difficulty(db, this.config.target_speed, tail);
+
+				let now = new Date();
+				let prev_calc = now - start;
+				console.trace(`Previously calc time: ${prev_calc}`);
+				start = now;
+
+				let h;
+				do {
+					if (candidate.nonce % 1000000 === 0) {
+						now = new Date();
+						let span = now - start;
+						if (span >= 15000) {
+							console.trace(`Miner not found hash in ${candidate.nonce} tries`);
+							return;
+						}
+					}
+					candidate.nonce++;
+					h = Utils.hash_kblock(candidate, this.vm);
+				} while (!Utils.difficulty_met(h, current_diff));
+
+				candidate.hash = h.toString('hex');
+				candidate.target_diff = current_diff;
+
+				console.info(`Block ${candidate.hash} mined, ${candidate.link} terminated`);
+				console.trace("Block mined ", JSON.stringify(candidate));
+				let current_tail = await this.db.peek_tail();
+				if (this.transport && tail.hash === current_tail.hash) {
+					try {
+						let time = process.hrtime();
+						let result = await this.db.finalize_macroblock(candidate, mblocks, sblocks);
+						let put_time = process.hrtime(time);
+						if (!result) {
+							console.warn('Block is not inserted');
+						} else {
+							console.debug(`macroblock ${candidate.hash} saved in `, Utils.format_time(put_time));
+							//candidate.hash = undefined;
+							//candidate.m_root = undefined;
+							//TODO: здесь надо отправлять микроблоки без транзакций
+							let macroblock = {kblock: tail};
+							macroblock.mblocks = mblocks;
+							macroblock.sblocks = sblocks;
+							console.silly(`broadcasting macroblock ${JSON.stringify({candidate, macroblock})}`);
+							this.cached_macroblock = {candidate, macroblock};
+							this.transport.broadcast("macroblock", {candidate, macroblock});
+						}
+					} catch (e) {
+						console.warn(`Failed to put candidate block (e) = ${e}`);
 					}
 				}
-				console.trace(`mblocks ${mblocks.length}, sblocks ${sblocks.length}, snapshot ${need_snapshot}`);
-				// Filter mblocks by min stakes
-				let accounts = await this.db.get_accounts_all(mblocks.map(m => m.publisher));
-				let tokens = await this.db.get_tokens_all(mblocks.map(m => m.token));
-				mblocks = Utils.valid_full_microblocks(mblocks, accounts, tokens, false);
-				// Filter sblocks by min stakes
-				let pos_stakes = await this.db.get_pos_info(sblocks.map(s => s.publisher));
-				let pos_min_stake = this.config.pos_min_stake;
-				let top_poses = await this.db.get_top_poses(this.config.top_poses_count);
-				sblocks = Utils.valid_full_statblocks(sblocks, pos_stakes, pos_min_stake, top_poses);
-				// Check blocks
-				if (mblocks.length > 0 && sblocks.length > 0 && !need_snapshot && Utils.exist_native_token_count(mblocks) >= this.native_mblocks_count) {
+			} else {
+				console.debug(`not a complete block ${tail.hash}, closing miner`);
+				this.count_not_complete++;
+				if (this.count_not_complete === Utils.MAX_COUNT_NOT_COMPLETE_BLOCK) {
 					this.count_not_complete = 0;
-					let candidate = {
-						time: Math.floor(new Date() / 1000),
-						publisher: this.config.id,
-						nonce: 0,
-						link: tail.hash,
-						m_root: Utils.merkle_root(mblocks, sblocks, snapshot_hash)
-					};
-					//calc difficulty target
-					let db = this.db;
-					let current_diff = await Utils.calc_difficulty(db, this.config.target_speed, tail);
+					this.broadcast_cashed_macroblock(tail);
+				}
+			}
+		} catch (e) {
+			console.error(e);
+		} finally {
+			setTimeout(this.miner.bind(this), Utils.MINER_INTERVAL);
+		}
+	}
 
-					let now = new Date();
-					let prev_calc = now - start;
-					console.trace(`Previously calc time: ${prev_calc}`);
-					start = now;
+	async miner_002(tail) {
+		console.silly(`Miner started`);
+		try {
+			if (this.sync_ranning) {
+				console.debug(`Miner not started. Sync running...`);
+				return;
+			}
+			let start = new Date();
+			if (tail === undefined) {
+				console.debug(`tail is undefined. Mining stopped`);
+				return;
+			}
 
-					let h;
-					do {
-						if (candidate.nonce % 5000 === 0) {
-							now = new Date();
-							let span = now - start;
-							if (span / 10 >= load) {
-								console.trace(`Miner not found hash in ${candidate.nonce} tries`);
-								return;
-							}
-						}
-						candidate.nonce++;
-						h = Utils.hash_kblock(candidate, this.vm);
-					} while (!Utils.difficulty_met(h, current_diff));
+			if (this.current_m_root === undefined || tail.hash !== this.current_m_root.kblocks_hash) {
+				console.debug(`m_root doesn't exist. Mining stopped`);
+				this.count_not_complete++;
+				if (this.count_not_complete === Utils.MAX_COUNT_NOT_COMPLETE_BLOCK) {
+					this.count_not_complete = 0;
+					this.broadcast_cashed_macroblock(tail);
+				}
+				return;
+			}
+			let cashier_ptr = await this.db.get_cashier_pointer();
+			if (tail.hash !== cashier_ptr) {
+				console.debug(`Cashier lags behind. Mining stopped`);
+				return;
+			}
 
-					candidate.hash = h.toString('hex');
-					candidate.target_diff = current_diff;
+			let mblocks = await this.db.get_microblocks_full(tail.hash);
+			let sblocks = await this.db.get_statblocks(tail.hash);
 
-					console.info(`Block ${candidate.hash} mined, ${candidate.link} terminated`);
-					console.trace("Block mined ", JSON.stringify(candidate));
-					let current_tail = await this.db.peek_tail();
-					if (this.transport && tail.hash === current_tail.hash) {
-						try {
-							let time = process.hrtime();
-							let result = await this.db.finalize_macroblock(candidate, mblocks, sblocks);
-							let put_time = process.hrtime(time);
-							if (!result) {
-								console.warn('Block is not inserted');
-							} else {
-								console.debug(`macroblock ${candidate.hash} saved in `, Utils.format_time(put_time));
-								//candidate.hash = undefined;
-								//candidate.m_root = undefined;
-								//TODO: здесь надо отправлять микроблоки без транзакций
-								let macroblock = {kblock: tail};
-								macroblock.mblocks = mblocks;
-								macroblock.sblocks = sblocks;
-								console.silly(`broadcasting macroblock ${JSON.stringify({candidate, macroblock})}`);
-								this.cached_macroblock = {candidate, macroblock};
-								this.transport.broadcast("macroblock", {candidate, macroblock});
-							}
-						} catch (e) {
-							console.warn(`Failed to put candidate block (e) = ${e}`);
+			mblocks = mblocks.filter(m => this.current_m_root.mblocks.find(mm => mm.hash === m.hash));
+			sblocks = sblocks.filter(s => this.current_m_root.sblocks.find(ss => ss.hash === s.hash));
+			if (!(mblocks.length === this.current_m_root.mblocks.length && sblocks.length === this.current_m_root.sblocks.length)) {
+				console.debug(`. Mining stopped`);
+				return;
+			}
+
+			// Сhecking the content of the candidate
+			if (mblocks.length > 0 && sblocks.length > 0 && Utils.exist_native_token_count(mblocks) >= this.native_mblocks_count) {
+				this.count_not_complete = 0;
+				let candidate = {
+					time: Math.floor(new Date() / 1000),
+					publisher: this.config.id,
+					nonce: 0,
+					link: tail.hash
+				};
+
+				candidate.m_root = this.current_m_root.m_root;
+				candidate.leader_sign = this.current_m_root.leader_sign;
+
+				//calc difficulty target
+				let db = this.db;
+				let current_diff = await Utils.calc_difficulty(db, this.config.target_speed, tail);
+
+				let now = new Date();
+				let prev_calc = now - start;
+				console.trace(`Previously calc time: ${prev_calc}`);
+				start = now;
+
+				let h;
+				do {
+					if (candidate.nonce % 1000000 === 0) {
+						now = new Date();
+						let span = now - start;
+						if (span >= 15000) {
+							console.trace(`Miner not found hash in ${candidate.nonce} tries`);
+							return;
 						}
 					}
-				} else {
-					console.debug(`not a complete block ${tail.hash}, closing miner`);
-					this.count_not_complete++;
-					if (this.count_not_complete === Utils.MAX_COUNT_NOT_COMPLETE_BLOCK) {
-						this.count_not_complete = 0;
-						this.broadcast_cashed_macroblock(tail);
+					candidate.nonce++;
+					h = Utils.hash_kblock(candidate, this.vm);
+				} while (!Utils.difficulty_met(h, current_diff));
+
+				candidate.hash = h.toString('hex');
+				candidate.target_diff = current_diff;
+
+				console.info(`Block ${candidate.hash} mined, ${candidate.link} terminated`);
+				console.trace("Block mined ", JSON.stringify(candidate));
+				let current_tail = await this.db.peek_tail();
+				if (this.transport && tail.hash === current_tail.hash) {
+					try {
+						let time = process.hrtime();
+						let result = await this.db.finalize_macroblock(candidate, mblocks, sblocks);
+						let put_time = process.hrtime(time);
+						if (!result) {
+							console.warn('Block is not inserted');
+						} else {
+							console.debug(`macroblock ${candidate.hash} saved in `, Utils.format_time(put_time));
+							//candidate.hash = undefined;
+							//candidate.m_root = undefined;
+							//TODO: здесь надо отправлять микроблоки без транзакций
+							let macroblock = {kblock: tail};
+							macroblock.mblocks = mblocks;
+							macroblock.sblocks = sblocks;
+							console.silly(`broadcasting macroblock ${JSON.stringify({candidate, macroblock})}`);
+							this.cached_macroblock = {candidate, macroblock};
+							this.transport.broadcast("macroblock", {candidate, macroblock});
+						}
+					} catch (e) {
+						console.warn(`Failed to put candidate block (e) = ${e}`);
 					}
 				}
-			} catch (e) {
-				console.error(e);
+			} else {
+				console.debug(`not a complete block ${tail.hash}, closing miner`);
+				this.count_not_complete++;
+				if (this.count_not_complete === Utils.MAX_COUNT_NOT_COMPLETE_BLOCK) {
+					this.count_not_complete = 0;
+					this.broadcast_cashed_macroblock(tail);
+				}
 			}
-			finally {
-				setTimeout(this.miner.bind(this), Utils.MINER_INTERVAL, load);
-			}
+		} catch (e) {
+			console.error(e);
+		} finally {
+			setTimeout(this.miner.bind(this), Utils.MINER_INTERVAL);
+		}
 	}
 }
 
