@@ -1,5 +1,5 @@
 rm -rf build
-mkdir build
+mkdir -p build/ext
 echo 'Image name:'$1
 echo 'Image type:'$2
 ##!/usr/bin/env bash
@@ -30,7 +30,7 @@ SNAPSHOT_FILE=$(grep snapshot_file $BASE_CONFIG | sed 's/.*: "\(.*\)",/\1/')
 echo $SNAPSHOT_FILE
 #obfuscation js files
 node obfuscator.js --input ./../../../ --output build
-node obfuscator.js --input ./../../ --output build
+node obfuscator.js --input ./../../ --output build/ext
 #copy snapshot file and explorer folder
 cp ../../../package.json build/package.json
 cp ../../../$SNAPSHOT_FILE build/$SNAPSHOT_FILE

@@ -16,15 +16,16 @@ class Miner {
 			return;
 		}
 
-		//TODO: reinit VM (change key), this fix etimeout starting DB
-		this.start_pow_miner(config.randomx.key);
-
 		this.ECC = new Utils.ECC(config.ecc.ecc_mode);
 
 		//init transport
 		this.transport = new Transport(this.config.id, 'miner');
 		this.transport.on('wait_sync', this.on_wait_sync.bind(this));
 		this.transport.on('m_root', this.on_merkle_root.bind(this));
+
+		//TODO: reinit VM (change key), this fix etimeout starting DB
+		this.start_pow_miner(config.randomx.key);
+
 	}
 
 	async init_vm_randomx(key) {
@@ -41,8 +42,7 @@ class Miner {
 	async start_pow_miner(key) {
 		let res = await this.init_vm_randomx(key);
 		console.info(`Virtual mashine starting result: ${res}`);
-		let tail = await this.db.peek_tail();
-		this.miner();
+		await this.miner();
 	}
 
 	async on_merkle_root(msg) {
@@ -51,7 +51,7 @@ class Miner {
 		console.silly(`on_merkle_root msg ${JSON.stringify(msg.data)}`);
 		//let is_valid = Utils.valid_merkle_root(m_root, mblocks, sblocks, snapshot_hash, leader_sign);
 		let recalc_m_root = Utils.merkle_root_002(mblocks, sblocks, snapshot_hash);
-		let isValid_leader_sign = Utils.valid_leader_sign(kblocks_hash, recalc_m_root, leader_sign, this.config.leader_id, this.ECC, this.config.ecc);
+		let isValid_leader_sign = Utils.valid_leader_sign_002(kblocks_hash, recalc_m_root, leader_sign, this.config.leader_id, this.ECC, this.config.ecc);
 		console.debug({isValid_leader_sign});
 		if (isValid_leader_sign)
 			this.current_m_root = {m_root, kblocks_hash, mblocks, sblocks, snapshot_hash, leader_sign};
@@ -71,15 +71,21 @@ class Miner {
 	};
 
 	async miner() {
-		let tail = await this.db.peek_tail(this.config.tail_timeout);
-		if(tail === undefined){
-			setTimeout(this.miner, Utils.MINER_INTERVAL);
-			return;
+		try {
+			let tail = await this.db.peek_tail(this.config.tail_timeout);
+			if (tail === undefined) {
+				setTimeout(this.miner, Utils.MINER_INTERVAL);
+				return;
+			}
+			if (tail.n < this.config.FORKS.fork_block_002)
+				this.miner_000(tail);
+			else
+				this.miner_002(tail);
+		} catch (e) {
+			console.error(e);
+		} finally {
+			setTimeout(this.miner.bind(this), Utils.MINER_INTERVAL);
 		}
-		if (tail.n < this.config.FORKS.fork_block_002)
-			this.miner_000(tail);
-		else
-			this.miner_002(tail);
 	}
 
 	async miner_000(tail) {
@@ -200,8 +206,6 @@ class Miner {
 			}
 		} catch (e) {
 			console.error(e);
-		} finally {
-			setTimeout(this.miner.bind(this), Utils.MINER_INTERVAL);
 		}
 	}
 
@@ -318,8 +322,6 @@ class Miner {
 			}
 		} catch (e) {
 			console.error(e);
-		} finally {
-			setTimeout(this.miner.bind(this), Utils.MINER_INTERVAL);
 		}
 	}
 }
