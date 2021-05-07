@@ -121,18 +121,20 @@ let native_mblocks_count = 1;
 feeder = async function (poa_server) {
 	try {
 		let k = await db.peek_tail(config.tail_timeout);
+		if (k === undefined)
+			return;
 		let kblocks_hash = k.hash;
 		let mblocks = await db.get_microblocks(kblocks_hash);
 
 		let owner_slots = await init_slots(config.mblock_slots.count, kblocks_hash);
-        console.info(`owner_slots = ${JSON.stringify(owner_slots)}`);
+		console.info(`owner_slots = ${JSON.stringify(owner_slots)}`);
 		let txs_awaiting = 0;
 		if (mblocks.length !== 0)
 			txs_awaiting = (await db.get_txs_awaiting(mblocks.map(m => m.hash))).txs_awaiting;
 		let now = Math.floor(new Date() / 1000);
 		if ((txs_awaiting >= config.max_txs_per_macroblock || mblocks.length >= config.max_mblocks_per_macroblock || now > (k.time + config.feader_watchdog)) && Utils.exist_native_token_count(mblocks) >= native_mblocks_count) {
 			console.debug(`Transaction count exceeds config.max_txs_per_macroblock (${config.max_txs_per_macroblock})`);
-			console.debug(`feader watchdog - ${ now > (k.time + config.feader_watchdog)}`)
+			console.debug(`feader watchdog - ${now > (k.time + config.feader_watchdog)}`)
 			let full_mblocks = await db.get_microblocks_full(kblocks_hash);
 			console.debug(`broadcast microblocks count = ${full_mblocks.length}`);
 			poa_server.transport.broadcast("microblocks", full_mblocks);
@@ -162,11 +164,11 @@ feeder = async function (poa_server) {
 				}
 			}
 		}
-	} catch
-		(e) {
+	} catch (e) {
 		console.error(e);
+	} finally {
+		setTimeout(feeder, config.feeder_interval_ms, poa_server);
 	}
-	setTimeout(feeder, config.feeder_interval_ms, poa_server);
 };
 
 let init_slots = async function(size, kblock_hash) {

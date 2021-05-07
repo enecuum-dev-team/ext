@@ -11,20 +11,17 @@ ARG BUILDVAR
 
 RUN if [ "$BUILDVAR" = "POW" ] || [ "$BUILDVAR" = "POS" ] ; then \
 	rm Explorer.js  ;\
-	rm Methods.js ;\
-	rm PoAServer.js ;\
+	rm ext/PoAServer.js ;\
 	rm Stat.js ;\
 	rm -r explorer ;\
 	rm iexplorer.js ;\
-	rm index.js ;\
+	rm ext/index.js ;\
 	rm istat.js ;\
 	rm stakecalc.js ;\
-	rm keysharing_full.js ;\
-elif [ "$BUILDVAR" = "POW_SINGLE_THREAD" ] ; then \
-	rm -r explorer ;\
+	rm ext/keysharing_full.js ;\
 elif [ "$BUILDVAR" = "FULLNODE" ] ; then \
-	rm PoAServer.js ;\
-	rm index.js ;\
+	rm ext/PoAServer.js ;\
+	rm ext/index.js ;\
 fi
 
 #files in container
@@ -67,17 +64,15 @@ ENV LAG_INTERVAL NaN
 CMD if [ "$B_VAR" = "POW" ] ; then \
 	pm2 start isyncer.js --name "syncer" -- --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$PUB_KEY --fastsync.lag_interval_b=$LAG_INTERVAL --fastsync.sync_interval_b=$SYNC_INTERVAL ;\
 	pm2 start itransport.js --name "transport" -- --port=$PORT --peer=$PEER --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$PUB_KEY ;\
-	pm2 start iminer.js --name "miner" -- --load 10 --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$PUB_KEY ;\
+	pm2 start ext/iminer.js --name "miner" -- --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$PUB_KEY ;\
 	pm2 start inodeapi.js --name "nodeapi" -- --enable_post_tx=$POST_TX --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$PUB_KEY ;\
 	pm2-runtime icashier.js --name "cashier"  -- --cashier_interval_ms 10 --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS ;\
 elif [ "$B_VAR" = "POS" ] ; then \
 	pm2 start isyncer.js --name "syncer" -- --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$POS_ID --fastsync.lag_interval_b=$LAG_INTERVAL --fastsync.sync_interval_b=$SYNC_INTERVAL ;\
 	pm2 start itransport.js --name "transport" -- --port=$PORT --peer=$PEER --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$POS_ID ;\
-	pm2 start iminer.js --name "miner" -- --load 0 --pos_share=$POS_SHARE --leader_socket=$PEER --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$POS_ID ;\
+	pm2 start ext/ilpos.js --name "miner" -- --pos_share=$POS_SHARE --leader_socket=$PEER --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$POS_ID ;\
 	pm2 start inodeapi.js --name "nodeapi" -- --enable_post_tx=$POST_TX --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$POS_ID ;\
 	pm2-runtime icashier.js --name "cashier"  -- --cashier_interval_ms 10 --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS ;\
-elif [ "$B_VAR" = "POW_SINGLE_THREAD" ] ; then \
-	pm2-runtime start index.js --name "pow" -- --poa_min_interval_ms 1000 --cashier_interval_ms 1000 --mblock_interval_ms 1000 --load 10 --port=$PORT --peer=$PEER --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --id=$PUB_KEY ;\
 elif [ "$B_VAR" = "FULLNODE" ] ; then \
 	pm2 start isyncer.js --name "syncer" -- --id='fullnode' --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS --fastsync.lag_interval_b=$LAG_INTERVAL --fastsync.sync_interval_b=$SYNC_INTERVAL ;\
 	pm2 start iexplorer.js --name "explorer"  -- --id='fullnode' --explorer 80 --dbhost=$DB_HOST --dbport=$DB_PORT --dbpass=$DB_PASS ;\
