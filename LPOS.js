@@ -26,6 +26,7 @@ class LPOS {
 
     async resend_m_root() {
         try {
+            clearTimeout(this.timer_merkle_root);
             let tail = await this.db.peek_tail();
             if (this.current_merkle_root === undefined || this.current_merkle_root.kblocks_hash !== tail.hash) {
                 this.on_emit_m_root({data: "timer"});
@@ -34,14 +35,14 @@ class LPOS {
                 this.transport.broadcast('m_root', this.current_merkle_root);
         } catch (e) {
             console.warn(`Error 'resend_m_root': ${e.message}`);
+        } finally {
+            this.timer_merkle_root = setTimeout(this.resend_m_root.bind(this),  Utils.M_ROOT_RESEND_INTERVAL);
         }
-        this.timer_merkle_root = setTimeout(this.resend_m_root.bind(this), Utils.M_ROOT_RESEND_INTERVAL);
     }
 
     async on_emit_m_root(msg) {
         try {
-            //console.debug(`on_emit_m_root - ${msg.data}`);
-            clearTimeout(this.timer_merkle_root);
+            console.info(`on_emit_m_root - ${msg.data}`);
             let tail = await this.db.peek_tail();
             let mblocks = await this.db.get_microblocks(tail.hash);
             let sblocks = await this.db.get_statblocks(tail.hash);
@@ -76,13 +77,12 @@ class LPOS {
             this.transport.broadcast('m_root', this.current_merkle_root);
         } catch (e) {
             console.warn(`Error 'emit m_root': ${e.message}`);
-        } finally {
-            this.timer_merkle_root = setTimeout(this.resend_m_root.bind(this),  Utils.M_ROOT_RESEND_INTERVAL);
         }
     }
 
     async resend_sblock() {
         try {
+            clearTimeout(this.timer_resend_sblock);
             let tail = await this.db.peek_tail();
             let kblocks_hash = tail.hash;
             console.debug(`re-broadcast sblock for kblock ${kblocks_hash}`);
@@ -96,15 +96,15 @@ class LPOS {
             }
         } catch (e) {
             console.error(e);
+        } finally {
+            this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_MINER_RESEND_INTERVAL);
         }
-        this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_MINER_RESEND_INTERVAL);
     }
 
     async on_emit_statblock(msg) {
         try{
             let kblocks_hash = msg.data;
             console.silly('on_emit_statblock kblocks_hash ', kblocks_hash);
-            clearTimeout(this.timer_resend_sblock);
 
             let bulletin = "not_implemented_yet";
             let publisher = this.config.id;
@@ -122,8 +122,6 @@ class LPOS {
                 console.warn(`not insert sblock`);
         } catch (e) {
             console.error(e);
-        } finally {
-            this.timer_resend_sblock = setTimeout(this.resend_sblock.bind(this), Utils.POS_MINER_RESEND_INTERVAL);
         }
     }
 }
