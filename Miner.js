@@ -47,14 +47,21 @@ class Miner {
 
 	async on_merkle_root(msg) {
 		let {kblocks_hash, snapshot_hash, m_root, leader_sign, mblocks, sblocks} = msg.data;
-		console.debug(`on_merkle_root  kblock_hash = ${kblocks_hash}`);
-		console.silly(`on_merkle_root msg ${JSON.stringify(msg.data)}`);
-		//let is_valid = Utils.valid_merkle_root(m_root, mblocks, sblocks, snapshot_hash, leader_sign);
-		let recalc_m_root = Utils.merkle_root_002(mblocks, sblocks, snapshot_hash);
-		let isValid_leader_sign = Utils.valid_leader_sign_002(kblocks_hash, recalc_m_root, leader_sign, this.config.leader_id, this.ECC, this.config.ecc);
-		console.debug({isValid_leader_sign});
-		if (isValid_leader_sign)
-			this.current_m_root = {m_root, kblocks_hash, mblocks, sblocks, snapshot_hash, leader_sign};
+		let tail = await this.db.peek_tail();
+		if(tail.hash === kblocks_hash) {
+			if(this.current_m_root === undefined || m_root !== this.current_m_root.m_root) {
+				console.debug(`on_merkle_root kblock_hash = ${kblocks_hash}`);
+				console.silly(`on_merkle_root msg ${JSON.stringify(msg.data)}`);
+				//let is_valid = Utils.valid_merkle_root(m_root, mblocks, sblocks, snapshot_hash, leader_sign);
+				let recalc_m_root = Utils.merkle_root_002(mblocks, sblocks, snapshot_hash);
+				let isValid_leader_sign = Utils.valid_leader_sign_002(kblocks_hash, recalc_m_root, leader_sign, this.config.leader_id, this.ECC, this.config.ecc);
+				console.debug({isValid_leader_sign});
+				if (isValid_leader_sign)
+					this.current_m_root = {m_root, kblocks_hash, mblocks, sblocks, snapshot_hash, leader_sign};
+			} else
+				console.debug(`on_merkle_root, this m_root has already been received`);
+		} else
+			console.debug(`on_merkle_root, kblocks_hash not equal tail.hash`);
 	}
 
 	on_wait_sync(msg) {
@@ -72,7 +79,7 @@ class Miner {
 
 	async miner() {
 		try {
-			let tail = await this.db.peek_tail(this.config.tail_timeout);
+			let tail = await this.db.peek_tail();
 			if (tail === undefined) {
 				setTimeout(this.miner, Utils.MINER_INTERVAL);
 				return;
@@ -155,10 +162,10 @@ class Miner {
 
 				let h;
 				do {
-					if (candidate.nonce % 1000000 === 0) {
+					if (candidate.nonce % 10000 === 0) {
 						now = new Date();
 						let span = now - start;
-						if (span >= 15000) {
+						if (span >= 1000) {
 							console.trace(`Miner not found hash in ${candidate.nonce} tries`);
 							return;
 						}
@@ -223,7 +230,10 @@ class Miner {
 			}
 
 			if (this.current_m_root === undefined || tail.hash !== this.current_m_root.kblocks_hash) {
-				console.debug(`m_root doesn't exist. Mining stopped`);
+				if(this.current_m_root === undefined)
+					console.debug(`m_root doesn't exist. Mining stopped`);
+				else
+					console.debug(`m_root doesn't exist for tail. Mining stopped`);
 				this.count_not_complete++;
 				if (this.count_not_complete === Utils.MAX_COUNT_NOT_COMPLETE_BLOCK) {
 					this.count_not_complete = 0;
@@ -239,6 +249,8 @@ class Miner {
 
 			let mblocks = await this.db.get_microblocks_full(tail.hash);
 			let sblocks = await this.db.get_statblocks(tail.hash);
+			let m_root = this.current_m_root.m_root;
+			let leader_sign = this.current_m_root.leader_sign;
 
 			mblocks = mblocks.filter(m => this.current_m_root.mblocks.find(mm => mm.hash === m.hash));
 			sblocks = sblocks.filter(s => this.current_m_root.sblocks.find(ss => ss.hash === s.hash));
@@ -254,11 +266,10 @@ class Miner {
 					time: Math.floor(new Date() / 1000),
 					publisher: this.config.id,
 					nonce: 0,
-					link: tail.hash
+					link: tail.hash,
+					m_root,
+					leader_sign
 				};
-
-				candidate.m_root = this.current_m_root.m_root;
-				candidate.leader_sign = this.current_m_root.leader_sign;
 
 				//calc difficulty target
 				let db = this.db;
@@ -271,10 +282,10 @@ class Miner {
 
 				let h;
 				do {
-					if (candidate.nonce % 1000000 === 0) {
+					if (candidate.nonce % 10000 === 0) {
 						now = new Date();
 						let span = now - start;
-						if (span >= 15000) {
+						if (span >= 1000) {
 							console.trace(`Miner not found hash in ${candidate.nonce} tries`);
 							return;
 						}
@@ -291,6 +302,7 @@ class Miner {
 				let current_tail = await this.db.peek_tail();
 				if (this.transport && tail.hash === current_tail.hash) {
 					try {
+						this.count_not_complete = 0;
 						let time = process.hrtime();
 						let result = await this.db.finalize_macroblock(candidate, mblocks, sblocks);
 						let put_time = process.hrtime(time);
