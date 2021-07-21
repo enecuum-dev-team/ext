@@ -8,7 +8,7 @@ const Explorer = require('../Explorer').Explorer;
 const Pending = require('../Pending');
 const Cashier = require('../Cashier');
 const Indexer = require('./Indexer');
-const Miner = require('./Miner');
+const Miner = require('../Miner');
 const Stat = require('../Stat').Stat;
 const Transport = require('../Transport').Hub;
 
