@@ -120,7 +120,7 @@ let native_mblocks_count = 1;
 
 feeder = async function (poa_server) {
 	try {
-		let k = await db.peek_tail(config.tail_timeout);
+		let k = await db.peek_tail();
 		if (k === undefined)
 			return;
 		let kblocks_hash = k.hash;

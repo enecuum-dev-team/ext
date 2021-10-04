@@ -118,6 +118,11 @@ class PoAServer {
 
 	send(ws, data) {
 		return new Promise((resolve, reject) => {
+            let timeout = 10000;
+            const timer = setTimeout(() => {
+                reject(new Error(`Promise timed out after ${timeout} ms`));
+            }, timeout);
+
 			ws.send(data, err => {
 				if (err) {
 					reject(err);
@@ -296,20 +301,20 @@ class PoAServer {
 				if (client.ws.readyState !== 1) {
 					console.debug(`${client.id}@${client.ip} client websocket closed`);
 					alive = false;
-				}
-
-				try {
-					if (probe) {
-						await this.send(client.ws, JSON.stringify(probe));
-					} else {
-						await this.send(client.ws, JSON.stringify(beacon));
-						sent = true;
-					}
-					client.last_use = now;
-				} catch (e) {
-					console.debug(`sending failed, ${e}`);
-					alive = false;
-				}
+				} else {
+                    try {
+                        if (probe) {
+                            await this.send(client.ws, JSON.stringify(probe));
+                        } else {
+                            await this.send(client.ws, JSON.stringify(beacon));
+                            sent = true;
+                        }
+                        client.last_use = now;
+                    } catch (e) {
+                        console.debug(`sending failed, ${e}`);
+                        alive = false;
+                    }
+                }
 			}
 		}
 		return {sent, alive};
