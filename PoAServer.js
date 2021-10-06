@@ -21,49 +21,9 @@ let create_message = function(mblock_data, config, need_fail){
 	let weil_err = false;
 	let verified = true;
 
-	mblock_data.nonce = 0;
-
-	if(ecc_mode === "short"){
-		do {
-			mblock_data.nonce = mblock_data.nonce + 1;
-			//mblock_data.txs[0].nonce = mblock_data.txs[0].nonce + 1;
-			m_hash = Utils.hash_mblock(mblock_data);
-			console.silly(`recreating block, nonce = ${mblock_data.nonce}, m_hash = ${m_hash}`);
-
-			let PK_LPoS = enq.getHash(mblock_data.kblocks_hash.toString() + LPoSID.toString() + mblock_data.nonce.toString());
-			let H_hash = enq.getHash(m_hash.toString() + LPoSID.toString());
-			H = enq.toPoint(parseInt(H_hash.slice(0, 5), 16), ecc.G, ecc.curve);
-			Q = enq.toPoint(parseInt(PK_LPoS.slice(0, 5), 16), ecc.G, ecc.curve);
-			if (!H.isInfinity(ecc.curve) && !Q.isInfinity(ecc.curve)){
-				secret = enq.mul(msk, Q, ecc.curve);
-				leader_sign = enq.sign(m_hash, LPoSID, ecc.G, ecc.G0, secret, ecc.curve);
-				weil_err = ((parseInt(H_hash.slice(0, 5), 16) % 13) === 7) && (leader_sign.r.x === 41)  && (leader_sign.r.y === 164);
-			}
-
-		} while (need_fail ^ (H.isInfinity(ecc.curve) || Q.isInfinity(ecc.curve) || weil_err));
-
-	}
-	else{
-		do {
-			mblock_data.nonce = mblock_data.nonce + 1;
-			//mblock_data.txs[0].nonce = mblock_data.txs[0].nonce + 1;
-			m_hash = Utils.hash_mblock(mblock_data);
-			console.silly(`recreating block, nonce = ${mblock_data.nonce}, m_hash = ${m_hash}`);
-			let PK_LPoS = enq.getHash(mblock_data.kblocks_hash.toString() + LPoSID.toString() + mblock_data.nonce.toString());
-			//Q = enq.toPoint(PK_LPoS, G, curve);
-			let bnPK_LPoS = enq.BigNumber(PK_LPoS);
-			let Q = enq.getQ(bnPK_LPoS, ecc.curve, ecc.e_fq);
-			secret = enq.mul(msk, Q, ecc.curve);
-			try{
-				leader_sign = enq.sign_tate(m_hash, LPoSID, ecc.G0_fq, secret, ecc.curve, ecc.e_fq);
-				//verified = enq.verify_tate(leader_sign, m_hash, PK_LPoS, G0_fq, MPK_fq, LPoSID, curve, e_fq);
-			}
-			catch(e){
-				console.error(e)
-			}
-
-		} while (need_fail ^ !verified);
-	}
+	mblock_data.nonce = 1;
+    m_hash = Utils.hash_mblock(mblock_data);
+    leader_sign = undefined;
 
 	let leader_beacon = {
 		"ver":POA_PROTOCOL_VERSION,
@@ -118,6 +78,11 @@ class PoAServer {
 
 	send(ws, data) {
 		return new Promise((resolve, reject) => {
+            let timeout = 10000;
+            const timer = setTimeout(() => {
+                reject(new Error(`Promise timed out after ${timeout} ms`));
+            }, timeout);
+
 			ws.send(data, err => {
 				if (err) {
 					reject(err);
@@ -136,15 +101,7 @@ class PoAServer {
 		let msg = create_message(probe_data, this.cfg);
 
 		//TODO: создавать зонд более тонко (несуществующий хеш кблока может вызвать подозрение, как и случайные транзакции)
-		//msg.data.mblock_data.txs[0].nonce++;
-		//msg.data.mblock_data.k_hash = crypto.createHmac('sha256', (Math.random()*1e10).toString()).digest('hex');
-		if (ecc_mode === "short") {
-			msg.data.leader_sign.r.x++;
-
-		} else {
-			msg.data.leader_sign.r.x = ["123", '456'];
-
-		}
+        msg.data.leader_sign = undefined;
 		return msg;
 	}
 
@@ -296,20 +253,20 @@ class PoAServer {
 				if (client.ws.readyState !== 1) {
 					console.debug(`${client.id}@${client.ip} client websocket closed`);
 					alive = false;
-				}
-
-				try {
-					if (probe) {
-						await this.send(client.ws, JSON.stringify(probe));
-					} else {
-						await this.send(client.ws, JSON.stringify(beacon));
-						sent = true;
-					}
-					client.last_use = now;
-				} catch (e) {
-					console.debug(`sending failed, ${e}`);
-					alive = false;
-				}
+				} else {
+                    try {
+                        if (probe) {
+                            await this.send(client.ws, JSON.stringify(probe));
+                        } else {
+                            await this.send(client.ws, JSON.stringify(beacon));
+                            sent = true;
+                        }
+                        client.last_use = now;
+                    } catch (e) {
+                        console.debug(`sending failed, ${e}`);
+                        alive = false;
+                    }
+                }
 			}
 		}
 		return {sent, alive};
