@@ -132,9 +132,9 @@ feeder = async function (poa_server) {
 		if (mblocks.length !== 0)
 			txs_awaiting = (await db.get_txs_awaiting(mblocks.map(m => m.hash))).txs_awaiting;
 		let now = Math.floor(new Date() / 1000);
-		if ((txs_awaiting >= config.max_txs_per_macroblock || mblocks.length >= config.max_mblocks_per_macroblock || now > (k.time + config.feader_watchdog)) && Utils.exist_native_token_count(mblocks) >= native_mblocks_count) {
+		if ((txs_awaiting >= config.max_txs_per_macroblock || mblocks.length >= config.max_mblocks_per_macroblock || now > (k.time + config.feeder_watchdog)) && Utils.exist_native_token_count(mblocks) >= native_mblocks_count) {
 			console.debug(`Transaction count exceeds config.max_txs_per_macroblock (${config.max_txs_per_macroblock})`);
-			console.debug(`feader watchdog - ${now > (k.time + config.feader_watchdog)}`)
+			console.debug(`feeder watchdog - ${now > (k.time + config.feeder_watchdog)}`)
 			let full_mblocks = await db.get_microblocks_full(kblocks_hash);
 			console.debug(`broadcast microblocks count = ${full_mblocks.length}`);
 			poa_server.transport.broadcast("microblocks", full_mblocks);
@@ -155,12 +155,14 @@ feeder = async function (poa_server) {
 					console.silly('txs = ', JSON.stringify(txs));
 					if (txs.length !== 0) {
 						let mblock_data = {kblocks_hash, txs};
-						let {sent, sent_hash} = await poa_server.send_mblock(mblock_data, slot.id);
+						let {sent, sent_hash} = await poa_server.send_mblock(mblock_data, slot.id, k.n);
 						if (sent) {
 							console.debug(`sent mblock ${sent_hash} for ${kblocks_hash} with txs [${txs.map(t => t.hash)}]`);
 						} else {
 							console.debug(`mblock NOT sent`);
 						}
+					} else {
+						console.warn(`no txs in pending`)
 					}
 				}
 			}
