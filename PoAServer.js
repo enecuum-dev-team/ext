@@ -10,20 +10,18 @@ const POA_PROTOCOL_VERSION = 4;
 // Default value to be set from config in PoAServer()
 let ecc_mode = "short";
 
-let create_message = function(mblock_data, config, need_fail){
+let create_message = function(mblock_data, config, height){
 	let LPoSID = config.leader_id;
-
-	let msk = enq.BigNumber(config.ecc[ecc_mode].msk);
 	let ecc = new Utils.ECC(ecc_mode);
-
-	let H, Q, m_hash;
-	let secret, leader_sign;
-	let weil_err = false;
-	let verified = true;
-
-	mblock_data.nonce = 1;
-    m_hash = Utils.hash_mblock(mblock_data);
-    leader_sign = undefined;
+	let m_hash,leader_sign;
+	if(height >= config.FORKS.fork_block_002) {
+		mblock_data.nonce = 1;
+		m_hash = Utils.hash_mblock(mblock_data);
+	} else {
+		let result = Utils.leader_sign_000(LPoSID, config.ecc[ecc_mode].msk, mblock_data, ecc, config.ecc[ecc_mode]);
+		m_hash = result.m_hash;
+		leader_sign = result.leader_sign;
+	}
 
 	let leader_beacon = {
 		"ver":POA_PROTOCOL_VERSION,
@@ -93,12 +91,12 @@ class PoAServer {
 		});
 	}
 
-	create_probe(publisher, tx_required) {
+	create_probe(publisher, tx_required, height) {
 		let random_hash = crypto.createHmac('sha256', (Math.random() * 1e10).toString()).digest('hex');
 		let txs = this.pending.get_random_txs(tx_required || 1);
 		let probe_data = {kblocks_hash: random_hash, txs, publisher};
 
-		let msg = create_message(probe_data, this.cfg);
+		let msg = create_message(probe_data, this.cfg, height);
 
 		//TODO: создавать зонд более тонко (несуществующий хеш кблока может вызвать подозрение, как и случайные транзакции)
         msg.data.leader_sign = undefined;
@@ -160,7 +158,7 @@ class PoAServer {
 		}
 	}
 
-	async send_mblock(mblock, owner) {
+	async send_mblock(mblock, owner, height) {
 		let tries = 0;
 		let sent = false;
 		let sent_hash = null;
@@ -190,8 +188,8 @@ class PoAServer {
 			if (client.ws.readyState === 1) {
 				if (client.key !== undefined) {
 					mblock.publisher = client.key;
-					let beacon = create_message(mblock, this.cfg);
-					let result = await this.use_client(client, beacon);
+					let beacon = create_message(mblock, this.cfg, height);
+					let result = await this.use_client(client, beacon, height);
 					console.trace(`result = ${JSON.stringify(result)}`);
 					if (result.alive) {
 						this.clients.push(client);
@@ -213,7 +211,7 @@ class PoAServer {
 		return {sent, sent_hash};
 	}
 
-	async use_client(client, beacon) {
+	async use_client(client, beacon, height) {
 		let sent = false;
 		let alive = true;
 
@@ -233,13 +231,13 @@ class PoAServer {
 
 				if ((client.karma < rnd) || ((client.last_use === null) && this.cfg.first_message_always_probe)) {
 					console.trace(`Decision made to send a probe to ${client.id}@${client.ip}`);
-					probe = this.create_probe(client.key);
+					probe = this.create_probe(client.key, height);
 				}
 
 				if (client.key === undefined && this.cfg.first_message_always_probe) {
 					client.karma /= this.karma_dec;
 					console.warn(`${client.id}@${client.ip} still not introduced, launching probe and decreasing karma to ${client.karma}`);
-					probe = this.create_probe(client.key);
+					probe = this.create_probe(client.key, height);
 				}
 
 				if (client.karma < this.karma_min) {
