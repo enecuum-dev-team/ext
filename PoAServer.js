@@ -297,7 +297,7 @@ class PoAServer {
 							console.debug(`mblock ${data.data.m_hash} returned by ${client.id}@${client.ip} in ${new Date() - client.mblock_time}ms`);
 
 							// Minable tokens: check token exist
-							let token = await this.db.get_tokens_all(data.data.token);
+							let token = await this.db.get_tokens(data.data.token);
 							if (token[0]) {
 								if (token[0].minable === 1) {
 									client.mblock.sign = data.data.sign;
@@ -310,7 +310,7 @@ class PoAServer {
 									let exist = await this.db.get_exist_microblocks(data.data.m_hash);
 									if (exist.length === 0) {
 										let accounts = await this.db.get_accounts_all([client.mblock.publisher]);
-										let tokens = await this.db.get_tokens_all([client.mblock.token]);
+										let tokens = await this.db.get_tokens([client.mblock.token]);
 										let valid_mblocks = Utils.valid_full_microblocks([client.mblock], accounts, tokens, true);
 										if (valid_mblocks.length === 1) {
 											await this.db.put_microblocks(valid_mblocks);
