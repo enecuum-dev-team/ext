@@ -162,7 +162,7 @@ feeder = async function (poa_server) {
 							console.debug(`mblock NOT sent`);
 						}
 					} else {
-						console.warn(`no txs in pending`)
+						console.debug(`no txs in pending`)
 					}
 				}
 			}
