@@ -138,7 +138,7 @@ feeder = async function (poa_server) {
 			let full_mblocks = await db.get_microblocks_full(kblocks_hash);
 			console.debug(`broadcast microblocks count = ${full_mblocks.length}`);
 			poa_server.transport.broadcast("microblocks", full_mblocks);
-			poa_server.transport.selfcast("emit_m_root", "on_microblocks");
+			//poa_server.transport.selfcast("emit_m_root", "on_microblocks");
 		} else {
 			let txs_required = config.max_tps * (config.feeder_interval_ms * 0.001);
 			txs_required = Math.min(config.max_txs_per_microblock, Math.max(config.min_txs_per_microblock, txs_required));
